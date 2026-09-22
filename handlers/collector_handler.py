@@ -22,11 +22,8 @@ WORK_SCHEDULE_MESSAGE = """
 """.strip()
 
 
-def detect_media_type(event: events.NewMessage.Event) -> tuple[str | None, str]:
 def detect_media_type(event: events.NewMessage.Event) -> tuple[str | None, str, int | None]:
     """
-    Xabarning media turini va matnini aniqlaydi.
-    Qaytaradi: (media_turi: str | None, text_summary: str)
     Xabarning media turini, matnini va TTL (o'z-o'zini o'chirish taymeri) ni aniqlaydi.
     Qaytaradi: (media_turi: str | None, text_summary: str, ttl_seconds: int | None)
     """
@@ -39,33 +36,22 @@ def detect_media_type(event: events.NewMessage.Event) -> tuple[str | None, str, 
         ttl_seconds = event.message.ttl_period
 
     if event.photo:
-        return "photo", caption or "[Rasm]"
         return "photo", caption or "[Rasm]", ttl_seconds
     elif event.voice:
-        return "voice", caption or "[Ovozli xabar (Voice)]"
         return "voice", caption or "[Ovozli xabar (Voice)]", ttl_seconds
     elif event.video_note:
-        return "video_note", caption or "[Videoxabar (Kruglyash)]"
         return "video_note", caption or "[Videoxabar (Kruglyash)]", ttl_seconds
     elif event.video:
-        return "video", caption or "[Video]"
         return "video", caption or "[Video]", ttl_seconds
     elif event.audio:
-        return "audio", caption or "[Audio/Musiqa]"
         return "audio", caption or "[Audio/Musiqa]", ttl_seconds
     elif event.sticker:
-        return "sticker", caption or "[Stiker]"
         return "sticker", caption or "[Stiker]", ttl_seconds
     elif event.document:
-        return "document", caption or "[Hujjat/Fayl]"
         return "document", caption or "[Hujjat/Fayl]", ttl_seconds
     elif event.contact:
-        return None, "[Kontakt ma'lumoti]"
         return None, "[Kontakt ma'lumoti]", ttl_seconds
     elif event.geo:
-        return None, "[Geolokatsiya]"
-    
-    return None, caption or "[Matnsiz xabar]"
         return None, "[Geolokatsiya]", ttl_seconds
 
     return None, caption or "[Matnsiz xabar]", ttl_seconds
@@ -73,7 +59,6 @@ def detect_media_type(event: events.NewMessage.Event) -> tuple[str | None, str, 
 
 def extract_content_summary(event: events.NewMessage.Event) -> str:
     """Xabar matnini yoki media turini aniqlab matn ko'rinishida qaytaradi."""
-    _, text = detect_media_type(event)
     _, text, _ = detect_media_type(event)
     return text
 
@@ -85,7 +70,6 @@ def register_handlers(
     rate_limiter: RateLimiter,
     notifier: MonitoringNotifier
 ) -> None:
-    """Xabarlarni yig'ish, media yuklash, avto-javob, /malumot va Media Anti-Delete handleri."""
     """Xabarlarni yig'ish, media/TTL yuklash, avto-javob, /malumot va Media Anti-Delete handleri."""
 
     # 1. Yangi xabarlarni tutish
@@ -104,11 +88,9 @@ def register_handlers(
             is_outgoing = bool(event.out)
             message_id = event.id
 
-            media_type, text = detect_media_type(event)
             media_type, text, ttl_seconds = detect_media_type(event)
             media_path = None
 
-            # Agar kiruvchi xabarda media bo'lsa, uni xavfsiz keshga yuklab olish (Anti-Delete uchun)
             # Agar kiruvchi xabarda media bo'lsa, uni xavfsiz keshga yuklab olish (Anti-Delete va TTL uchun)
             if not is_outgoing and media_type:
                 try:
@@ -151,7 +133,6 @@ def register_handlers(
                 if not sender or not isinstance(sender, User) or sender.bot or sender.is_self:
                     return
 
-                # A) /malumot yoki /info komandasi tekshiruvi
                 # 🔥 1. Agar xabar O'Z-O'ZINI O'CHIRUVCHI (TTL / View-Once) bo'lsa -> Darhol botga jo'natish!
                 if ttl_seconds and media_path:
                     logger.warning(
@@ -175,7 +156,6 @@ def register_handlers(
                     await event.reply(WORK_SCHEDULE_MESSAGE, parse_mode="html")
                     return
 
-                # B) Kunlik 1 marta avto-javob tekshiruvi
                 # 3. Kunlik 1 marta avto-javob tekshiruvi
                 can_reply, action_reason = await rate_limiter.should_auto_reply(sender.id)
                 if can_reply:
