@@ -1,0 +1,16 @@
+services:
+  userbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: virtual_friend_analytics
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TIMEZONE=Asia/Tashkent
+    volumes:
+      - ./sessions:/app/sessions  # Telegram sessiya va SQLite ma'lumotlar bazasi saqlanadi

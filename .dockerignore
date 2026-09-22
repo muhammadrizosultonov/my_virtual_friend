@@ -1,0 +1,24 @@
+# Git va virtual muhit
+.git
+.gitignore
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Maxfiy fayllar va ma'lumotlar (Docker volume orqali ulanadi)
+.env
+sessions/
+*.session
+*.session-journal
+*.db
+*.sqlite3
+
+# Testlar va loglar
+tests/
+*.log
+.coverage
+htmlcov/
+

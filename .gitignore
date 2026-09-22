@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Secrets & Config
+.env
+
+# Telethon & SQLite Data
+sessions/
+*.session
+*.session-journal
+*.db
+*.sqlite3
+
+# Logs & Temp
+*.log
+.coverage
+htmlcov/
+.pytest_cache/
+
