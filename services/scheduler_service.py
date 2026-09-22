@@ -103,6 +103,8 @@ class DailyScheduler:
                 target_date=yesterday,
                 tz_name=self.tz_name
             )
+            # 3 kundan oshgan eski media fayllarni diskdan tozalash
+            await self.db.cleanup_old_media(days=3)
 
         self.scheduler.add_job(
             midnight_job,

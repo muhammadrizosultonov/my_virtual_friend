@@ -29,13 +29,15 @@ class Database:
                 username TEXT,
                 is_outgoing BOOLEAN NOT NULL,
                 text TEXT,
+                media_type TEXT NULL,
+                media_path TEXT NULL,
                 is_deleted BOOLEAN DEFAULT 0,
                 deleted_at TIMESTAMP NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
-        # Eski bazalar uchun avtomatik migratsiya (ustunlarni tekshirish)
+        # Eski bazalar uchun avtomatik migratsiya
         async with self._db.execute("PRAGMA table_info(messages)") as cursor:
             columns = [row["name"] for row in await cursor.fetchall()]
             if "is_deleted" not in columns:
@@ -44,6 +46,12 @@ class Database:
             if "deleted_at" not in columns:
                 await self._db.execute("ALTER TABLE messages ADD COLUMN deleted_at TIMESTAMP NULL")
                 logger.info("Migratsiya: 'deleted_at' ustuni qo'shildi.")
+            if "media_type" not in columns:
+                await self._db.execute("ALTER TABLE messages ADD COLUMN media_type TEXT NULL")
+                logger.info("Migratsiya: 'media_type' ustuni qo'shildi.")
+            if "media_path" not in columns:
+                await self._db.execute("ALTER TABLE messages ADD COLUMN media_path TEXT NULL")
+                logger.info("Migratsiya: 'media_path' ustuni qo'shildi.")
 
         await self._db.execute("""
             CREATE TABLE IF NOT EXISTS daily_replies (
@@ -96,6 +104,8 @@ class Database:
         username: Optional[str],
         is_outgoing: bool,
         text: str,
+        media_type: Optional[str] = None,
+        media_path: Optional[str] = None,
         created_at: Optional[datetime] = None
     ) -> None:
         """Xabarni bazaga saqlash."""
@@ -110,10 +120,10 @@ class Database:
         await self._db.execute(
             """
             INSERT INTO messages (
-                message_id, chat_id, sender_name, username, is_outgoing, text, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                message_id, chat_id, sender_name, username, is_outgoing, text, media_type, media_path, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (message_id, chat_id, sender_name, username, is_outgoing, text, created_at_str)
+            (message_id, chat_id, sender_name, username, is_outgoing, text, media_type, media_path, created_at_str)
         )
         await self._db.commit()
 
@@ -128,7 +138,8 @@ class Database:
         params: List[Any] = list(message_ids)
 
         query = f"""
-            SELECT id, message_id, chat_id, sender_name, username, is_outgoing, text, is_deleted, created_at
+            SELECT id, message_id, chat_id, sender_name, username, is_outgoing, text, 
+                   media_type, media_path, is_deleted, created_at
             FROM messages
             WHERE message_id IN ({placeholders})
         """
@@ -165,6 +176,46 @@ class Database:
         await self._db.execute(query, params)
         await self._db.commit()
 
+    async def cleanup_old_media(self, days: int = 3) -> int:
+        """Eski yuklangan media fayllarni diskdan tozalash."""
+        if not self._db:
+            return 0
+
+        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_str = cutoff_date.strftime("%Y-%m-%d %H:%M:%S")
+
+        async with self._db.execute(
+            """
+            SELECT id, media_path FROM messages 
+            WHERE media_path IS NOT NULL AND is_deleted = 0 AND created_at < ?
+            """,
+            (cutoff_str,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        cleaned_count = 0
+        cleaned_ids = []
+        for row in rows:
+            path = row["media_path"]
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                    cleaned_count += 1
+                except Exception as e:
+                    logger.warning(f"Media faylni o'chirishda xatolik ({path}): {e}")
+            cleaned_ids.append(row["id"])
+
+        if cleaned_ids:
+            placeholders = ",".join("?" for _ in cleaned_ids)
+            await self._db.execute(
+                f"UPDATE messages SET media_path = NULL WHERE id IN ({placeholders})",
+                cleaned_ids
+            )
+            await self._db.commit()
+
+        logger.info(f"🧹 Xotira tozalash: {cleaned_count} ta eski media fayl diskdan o'chirildi.")
+        return cleaned_count
+
     async def get_messages_for_period(
         self, start_dt: datetime, end_dt: datetime
     ) -> List[Dict[str, Any]]:
@@ -177,7 +228,8 @@ class Database:
 
         async with self._db.execute(
             """
-            SELECT message_id, chat_id, sender_name, username, is_outgoing, text, is_deleted, created_at
+            SELECT message_id, chat_id, sender_name, username, is_outgoing, text, 
+                   media_type, media_path, is_deleted, created_at
             FROM messages
             WHERE created_at >= ? AND created_at <= ?
             ORDER BY chat_id, created_at ASC

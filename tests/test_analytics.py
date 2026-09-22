@@ -203,6 +203,163 @@ class TestDailyAnalyticsAndFeatures(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0]["is_deleted"], 1)
 
+    async def test_media_anti_delete(self):
+        mock_client = MagicMock()
+        registered_handlers = []
+
+        def on_decorator(event_builder):
+            def wrapper(func):
+                registered_handlers.append((event_builder, func))
+                return func
+            return wrapper
+
+        mock_client.on.side_effect = on_decorator
+
+        mock_gemini = MagicMock(spec=GeminiService)
+        mock_notifier = MagicMock(spec=MonitoringNotifier)
+        mock_notifier.send_deleted_media_alert = AsyncMock(return_value=True)
+        rate_limiter = RateLimiter(db=self.db)
+
+        register_handlers(
+            client=mock_client,
+            db=self.db,
+            gemini_service=mock_gemini,
+            rate_limiter=rate_limiter,
+            notifier=mock_notifier
+        )
+
+        # Create dummy media file
+        media_file = os.path.join(self.test_dir, "test_photo.jpg")
+        with open(media_file, "wb") as f:
+            f.write(b"fake photo bytes")
+
+        # Save an incoming media message to DB
+        await self.db.save_message(
+            message_id=999,
+            chat_id=444,
+            sender_name="Dilshod",
+            username="dilshod_d",
+            is_outgoing=False,
+            text="Bu rasm matni",
+            media_type="photo",
+            media_path=media_file
+        )
+
+        # Find MessageDeleted handler
+        deleted_handler = next(h for b, h in registered_handlers if b == events.MessageDeleted)
+
+        # Simulate deletion event
+        mock_del_event = MagicMock()
+        mock_del_event.deleted_ids = [999]
+
+        await deleted_handler(mock_del_event)
+
+        # Verification: send_deleted_media_alert must be called
+        self.assertTrue(mock_notifier.send_deleted_media_alert.called)
+        call_kwargs = mock_notifier.send_deleted_media_alert.call_args[1]
+        self.assertEqual(call_kwargs["sender_id"], 444)
+        self.assertEqual(call_kwargs["sender_name"], "Dilshod")
+        self.assertEqual(call_kwargs["media_type"], "photo")
+        self.assertEqual(call_kwargs["media_path"], media_file)
+
+    async def test_ttl_media_detection(self):
+        mock_client = MagicMock()
+        registered_handlers = []
+
+        def on_decorator(event_builder):
+            def wrapper(func):
+                registered_handlers.append((event_builder, func))
+                return func
+            return wrapper
+
+        mock_client.on.side_effect = on_decorator
+
+        mock_gemini = MagicMock(spec=GeminiService)
+        mock_notifier = MagicMock(spec=MonitoringNotifier)
+        mock_notifier.send_ttl_media_alert = AsyncMock(return_value=True)
+        rate_limiter = RateLimiter(db=self.db)
+
+        register_handlers(
+            client=mock_client,
+            db=self.db,
+            gemini_service=mock_gemini,
+            rate_limiter=rate_limiter,
+            notifier=mock_notifier
+        )
+
+        new_msg_handler = next(h for b, h in registered_handlers if b == events.NewMessage)
+
+        # Create dummy media file
+        media_file = os.path.join(self.test_dir, "ttl_photo.jpg")
+        with open(media_file, "wb") as f:
+            f.write(b"ttl secret photo bytes")
+
+        # Simulate incoming TTL message
+        mock_event = MagicMock()
+        mock_event.is_private = True
+        mock_event.out = False
+        mock_event.id = 888
+        mock_event.chat_id = 999
+        mock_event.photo = True
+        mock_event.voice = None
+        mock_event.video_note = None
+        mock_event.video = None
+        mock_event.audio = None
+        mock_event.sticker = None
+        mock_event.document = None
+        mock_event.contact = None
+        mock_event.geo = None
+        mock_event.raw_text = "5 soniyada o'chuvchi maxfiy rasm"
+        mock_event.download_media = AsyncMock(return_value=media_file)
+
+        mock_media = MagicMock()
+        mock_media.ttl_seconds = 5
+        mock_event.media = mock_media
+
+        mock_user = MagicMock(spec=User)
+        mock_user.id = 999
+        mock_user.first_name = "Ayyor"
+        mock_user.last_name = "User"
+        mock_user.username = "ayyor_user"
+        mock_user.bot = False
+        mock_user.is_self = False
+        mock_event.get_chat = AsyncMock(return_value=mock_user)
+        mock_event.get_sender = AsyncMock(return_value=mock_user)
+
+        with patch.object(rate_limiter, "is_workday", return_value=False):
+            await new_msg_handler(mock_event)
+
+        # Verification: TTL alert must be sent immediately
+        self.assertTrue(mock_notifier.send_ttl_media_alert.called)
+        call_kwargs = mock_notifier.send_ttl_media_alert.call_args[1]
+        self.assertEqual(call_kwargs["sender_id"], 999)
+        self.assertEqual(call_kwargs["ttl_seconds"], 5)
+        self.assertEqual(call_kwargs["media_type"], "photo")
+        self.assertEqual(call_kwargs["media_path"], media_file)
+
+    async def test_cleanup_old_media(self):
+        media_file = os.path.join(self.test_dir, "old_video.mp4")
+        with open(media_file, "wb") as f:
+            f.write(b"video bytes")
+
+        five_days_ago = datetime.now() - timedelta(days=5)
+        await self.db.save_message(
+            message_id=777,
+            chat_id=555,
+            sender_name="User",
+            username=None,
+            is_outgoing=False,
+            text="[Video]",
+            media_type="video",
+            media_path=media_file,
+            created_at=five_days_ago
+        )
+
+        self.assertTrue(os.path.exists(media_file))
+        cleaned = await self.db.cleanup_old_media(days=3)
+        self.assertEqual(cleaned, 1)
+        self.assertFalse(os.path.exists(media_file))
+
     async def test_run_daily_digest_flow(self):
         now = datetime.now()
         await self.db.save_message(

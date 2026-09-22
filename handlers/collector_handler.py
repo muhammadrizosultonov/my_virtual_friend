@@ -1,4 +1,5 @@
 import logging
+import os
 from telethon import TelegramClient, events
 from telethon.tl.types import User
 from database.db import Database
@@ -21,31 +22,60 @@ WORK_SCHEDULE_MESSAGE = """
 """.strip()
 
 
-def extract_content_summary(event: events.NewMessage.Event) -> str:
-    """Xabar matnini yoki media turini aniqlab matn ko'rinishida qaytaradi."""
-    text = (event.raw_text or "").strip()
-    if text:
-        return text
+def detect_media_type(event: events.NewMessage.Event) -> tuple[str | None, str]:
+def detect_media_type(event: events.NewMessage.Event) -> tuple[str | None, str, int | None]:
+    """
+    Xabarning media turini va matnini aniqlaydi.
+    Qaytaradi: (media_turi: str | None, text_summary: str)
+    Xabarning media turini, matnini va TTL (o'z-o'zini o'chirish taymeri) ni aniqlaydi.
+    Qaytaradi: (media_turi: str | None, text_summary: str, ttl_seconds: int | None)
+    """
+    caption = (event.raw_text or "").strip()
+    ttl_seconds = None
+
+    if event.media:
+        ttl_seconds = getattr(event.media, "ttl_seconds", None)
+    if not ttl_seconds and hasattr(event.message, "ttl_period") and event.message.ttl_period:
+        ttl_seconds = event.message.ttl_period
 
     if event.photo:
-        return "[Rasm]"
+        return "photo", caption or "[Rasm]"
+        return "photo", caption or "[Rasm]", ttl_seconds
     elif event.voice:
-        return "[Ovozli xabar (Voice)]"
+        return "voice", caption or "[Ovozli xabar (Voice)]"
+        return "voice", caption or "[Ovozli xabar (Voice)]", ttl_seconds
     elif event.video_note:
-        return "[Videoxabar (Kruglyash)]"
+        return "video_note", caption or "[Videoxabar (Kruglyash)]"
+        return "video_note", caption or "[Videoxabar (Kruglyash)]", ttl_seconds
     elif event.video:
-        return "[Video]"
+        return "video", caption or "[Video]"
+        return "video", caption or "[Video]", ttl_seconds
     elif event.audio:
-        return "[Audio/Musiqa]"
+        return "audio", caption or "[Audio/Musiqa]"
+        return "audio", caption or "[Audio/Musiqa]", ttl_seconds
     elif event.sticker:
-        return "[Stiker]"
+        return "sticker", caption or "[Stiker]"
+        return "sticker", caption or "[Stiker]", ttl_seconds
     elif event.document:
-        return "[Hujjat/Fayl]"
+        return "document", caption or "[Hujjat/Fayl]"
+        return "document", caption or "[Hujjat/Fayl]", ttl_seconds
     elif event.contact:
-        return "[Kontakt ma'lumoti]"
+        return None, "[Kontakt ma'lumoti]"
+        return None, "[Kontakt ma'lumoti]", ttl_seconds
     elif event.geo:
-        return "[Geolokatsiya]"
-    return "[Matnsiz xabar]"
+        return None, "[Geolokatsiya]"
+    
+    return None, caption or "[Matnsiz xabar]"
+        return None, "[Geolokatsiya]", ttl_seconds
+
+    return None, caption or "[Matnsiz xabar]", ttl_seconds
+
+
+def extract_content_summary(event: events.NewMessage.Event) -> str:
+    """Xabar matnini yoki media turini aniqlab matn ko'rinishida qaytaradi."""
+    _, text = detect_media_type(event)
+    _, text, _ = detect_media_type(event)
+    return text
 
 
 def register_handlers(
@@ -55,13 +85,14 @@ def register_handlers(
     rate_limiter: RateLimiter,
     notifier: MonitoringNotifier
 ) -> None:
-    """Xabarlarni yig'ish, avto-javob, /malumot komandasi va Anti-Delete handleri."""
+    """Xabarlarni yig'ish, media yuklash, avto-javob, /malumot va Media Anti-Delete handleri."""
+    """Xabarlarni yig'ish, media/TTL yuklash, avto-javob, /malumot va Media Anti-Delete handleri."""
 
     # 1. Yangi xabarlarni tutish
     @client.on(events.NewMessage)
     async def handle_private_message(event: events.NewMessage.Event):
         try:
-            # Faqat shaxsiy chatlarni tekshirish (guruh va kanallar inkor qilinadi)
+            # Faqat shaxsiy chatlarni tekshirish
             if not event.is_private:
                 return
 
@@ -72,7 +103,28 @@ def register_handlers(
             chat_id = event.chat_id
             is_outgoing = bool(event.out)
             message_id = event.id
-            text = extract_content_summary(event)
+
+            media_type, text = detect_media_type(event)
+            media_type, text, ttl_seconds = detect_media_type(event)
+            media_path = None
+
+            # Agar kiruvchi xabarda media bo'lsa, uni xavfsiz keshga yuklab olish (Anti-Delete uchun)
+            # Agar kiruvchi xabarda media bo'lsa, uni xavfsiz keshga yuklab olish (Anti-Delete va TTL uchun)
+            if not is_outgoing and media_type:
+                try:
+                    os.makedirs("sessions/media", exist_ok=True)
+                    # 50MB dan kichik mediani yuklab olish
+                    file_size = 0
+                    if hasattr(event, "file") and event.file and hasattr(event.file, "size") and isinstance(event.file.size, int):
+                        file_size = event.file.size
+
+                    if file_size < 50 * 1024 * 1024:
+                        dest_prefix = f"sessions/media/msg_{message_id}_{chat_id}"
+                        media_path = await event.download_media(file=dest_prefix)
+                        if media_path:
+                            logger.info(f"📥 Media saqlandi [{media_type}]: {media_path}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Mediani yuklab olishda xatolik: {e}")
 
             # Kontakt ma'lumotlari
             contact_name = f"{chat.first_name or ''} {chat.last_name or ''}".strip() or "Noma'lum"
@@ -85,7 +137,9 @@ def register_handlers(
                 sender_name=contact_name,
                 username=username,
                 is_outgoing=is_outgoing,
-                text=text
+                text=text,
+                media_type=media_type,
+                media_path=media_path
             )
 
             direction = "📤 Chiquvchi" if is_outgoing else "📥 Kiruvchi"
@@ -98,6 +152,23 @@ def register_handlers(
                     return
 
                 # A) /malumot yoki /info komandasi tekshiruvi
+                # 🔥 1. Agar xabar O'Z-O'ZINI O'CHIRUVCHI (TTL / View-Once) bo'lsa -> Darhol botga jo'natish!
+                if ttl_seconds and media_path:
+                    logger.warning(
+                        f"🔥 TTL (View-Once) media aniqlandi! Foydalanuvchi: {contact_name} "
+                        f"(TTL: {ttl_seconds}s)"
+                    )
+                    await notifier.send_ttl_media_alert(
+                        sender_id=sender.id,
+                        sender_name=contact_name,
+                        sender_username=username,
+                        text=text,
+                        media_type=media_type or "photo",
+                        media_path=media_path,
+                        ttl_seconds=ttl_seconds
+                    )
+
+                # 2. /malumot yoki /info komandasi tekshiruvi
                 clean_text = text.strip().lower()
                 if clean_text in ["/malumot", "malumot", "/info", "info"]:
                     logger.info(f"ℹ️ [{contact_name}] uchun /malumot jadvali yuborilmoqda...")
@@ -105,6 +176,7 @@ def register_handlers(
                     return
 
                 # B) Kunlik 1 marta avto-javob tekshiruvi
+                # 3. Kunlik 1 marta avto-javob tekshiruvi
                 can_reply, action_reason = await rate_limiter.should_auto_reply(sender.id)
                 if can_reply:
                     logger.info(f"🧠 Gemini AI orqali [{contact_name}] uchun mos avto-javob tayyorlanmoqda...")
@@ -134,7 +206,7 @@ def register_handlers(
         except Exception as e:
             logger.error(f"❌ Xabarni qayta ishlashda xatolik: {e}", exc_info=True)
 
-    # 2. O'chirilgan xabarlarni tutish (Anti-Delete)
+    # 2. O'chirilgan xabarlarni tutish (Media & Text Anti-Delete)
     @client.on(events.MessageDeleted)
     async def handle_deleted_message(event: events.MessageDeleted.Event):
         try:
@@ -148,19 +220,32 @@ def register_handlers(
                 return
 
             for msg in deleted_messages:
-                # Faqat kiruvchi xabarlar o'chirilganda monitoring botga xabar berish
                 if not msg["is_outgoing"]:
                     logger.warning(
                         f"🚨 O'chirilgan xabar aniqlandi! Foydalanuvchi: {msg['sender_name']} "
                         f"(ID: {msg['chat_id']}): {msg['text'][:50]}"
                     )
-                    await notifier.send_deleted_message_alert(
-                        sender_id=msg["chat_id"],
-                        sender_name=msg["sender_name"],
-                        sender_username=msg["username"],
-                        text=msg["text"],
-                        sent_at=msg["created_at"]
-                    )
+
+                    # Agar media bo'lsa -> Rasm/video faylini o'zini jo'natish
+                    if msg.get("media_type") and msg.get("media_path"):
+                        await notifier.send_deleted_media_alert(
+                            sender_id=msg["chat_id"],
+                            sender_name=msg["sender_name"],
+                            sender_username=msg["username"],
+                            text=msg["text"],
+                            media_type=msg["media_type"],
+                            media_path=msg["media_path"],
+                            sent_at=msg["created_at"]
+                        )
+                    else:
+                        # Matnli xabar bo'lsa -> Matnli ogohlantirish
+                        await notifier.send_deleted_message_alert(
+                            sender_id=msg["chat_id"],
+                            sender_name=msg["sender_name"],
+                            sender_username=msg["username"],
+                            text=msg["text"],
+                            sent_at=msg["created_at"]
+                        )
 
             # Bazada o'chirilgan deb belgilash
             await db.mark_messages_deleted(deleted_ids)
