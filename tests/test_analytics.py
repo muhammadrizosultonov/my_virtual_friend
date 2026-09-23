@@ -16,6 +16,11 @@ from services.notifier import MonitoringNotifier, split_message
 from services.rate_limiter import RateLimiter
 from services.scheduler_service import run_daily_digest
 from services.stats_service import format_stats_header, prepare_daily_transcript
+from services.downloader_service import (
+    save_content_to_saved_messages,
+    resolve_message_from_link,
+    TELEGRAM_LINK_PATTERN
+)
 
 
 class TestDailyAnalyticsAndFeatures(unittest.IsolatedAsyncioTestCase):
@@ -390,6 +395,110 @@ class TestDailyAnalyticsAndFeatures(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(success)
         self.assertTrue(mock_gemini.generate_daily_report.called)
         self.assertTrue(mock_notifier.send_message.called)
+
+    async def test_save_content_to_saved_messages_media(self):
+        mock_client = MagicMock()
+        mock_client.send_file = AsyncMock(return_value=True)
+
+        temp_media = os.path.join(self.test_dir, "test_save.jpg")
+        with open(temp_media, "wb") as f:
+            f.write(b"fake photo data")
+
+        mock_client.download_media = AsyncMock(return_value=temp_media)
+
+        mock_target = MagicMock()
+        mock_target.id = 12345
+        mock_target.media = MagicMock()
+        mock_target.raw_text = "Himoyalangan rasm"
+        mock_target.entities = []
+        mock_target.voice = False
+        mock_target.video_note = False
+        mock_target.video = False
+
+        result = await save_content_to_saved_messages(
+            client=mock_client,
+            target_msg=mock_target,
+            temp_dir=os.path.join(self.test_dir, "downloads")
+        )
+
+        self.assertTrue(result)
+        self.assertTrue(mock_client.send_file.called)
+        call_args, call_kwargs = mock_client.send_file.call_args
+        self.assertEqual(call_args[0], 'me')
+        self.assertEqual(call_kwargs["caption"], "Himoyalangan rasm")
+        # Temporary file should be deleted
+        self.assertFalse(os.path.exists(temp_media))
+
+    async def test_save_content_to_saved_messages_text_only(self):
+        mock_client = MagicMock()
+        mock_client.send_message = AsyncMock(return_value=True)
+
+        mock_target = MagicMock()
+        mock_target.id = 54321
+        mock_target.media = None
+        mock_target.raw_text = "Himoyalangan maxfiy matn"
+        mock_target.entities = []
+
+        result = await save_content_to_saved_messages(
+            client=mock_client,
+            target_msg=mock_target
+        )
+
+        self.assertTrue(result)
+        self.assertTrue(mock_client.send_message.called)
+        call_args, call_kwargs = mock_client.send_message.call_args
+        self.assertEqual(call_args[0], 'me')
+        self.assertEqual(call_kwargs["message"], "Himoyalangan maxfiy matn")
+
+    async def test_handle_save_command_reply(self):
+        mock_client = MagicMock()
+        registered_handlers = []
+
+        def on_decorator(event_builder):
+            def wrapper(func):
+                registered_handlers.append((event_builder, func))
+                return func
+            return wrapper
+
+        mock_client.on.side_effect = on_decorator
+        mock_gemini = MagicMock(spec=GeminiService)
+        mock_notifier = MagicMock(spec=MonitoringNotifier)
+        rate_limiter = RateLimiter(db=self.db)
+
+        register_handlers(
+            client=mock_client,
+            db=self.db,
+            gemini_service=mock_gemini,
+            rate_limiter=rate_limiter,
+            notifier=mock_notifier
+        )
+
+        # Find outgoing save handler
+        save_handler = None
+        for b, h in registered_handlers:
+            if hasattr(b, "outgoing") and b.outgoing:
+                save_handler = h
+                break
+
+        self.assertIsNotNone(save_handler)
+
+        mock_reply_msg = MagicMock()
+        mock_reply_msg.id = 777
+        mock_reply_msg.media = None
+        mock_reply_msg.raw_text = "Guruhdagi muhim post"
+        mock_reply_msg.entities = []
+
+        mock_event = MagicMock()
+        mock_event.raw_text = ".save"
+        mock_event.get_reply_message = AsyncMock(return_value=mock_reply_msg)
+        mock_event.delete = AsyncMock()
+
+        mock_client.send_message = AsyncMock(return_value=True)
+
+        await save_handler(mock_event)
+
+        self.assertTrue(mock_client.send_message.called)
+        self.assertTrue(mock_event.delete.called)
 
 
 if __name__ == "__main__":

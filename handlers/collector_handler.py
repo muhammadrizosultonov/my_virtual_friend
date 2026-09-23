@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from telethon import TelegramClient, events
@@ -6,6 +7,10 @@ from database.db import Database
 from services.gemini_service import GeminiService
 from services.notifier import MonitoringNotifier
 from services.rate_limiter import RateLimiter
+from services.downloader_service import (
+    save_content_to_saved_messages,
+    resolve_message_from_link
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +75,7 @@ def register_handlers(
     rate_limiter: RateLimiter,
     notifier: MonitoringNotifier
 ) -> None:
-    """Xabarlarni yig'ish, media/TTL yuklash, avto-javob, /malumot va Media Anti-Delete handleri."""
+    """Xabarlarni yig'ish, media/TTL yuklash, avto-javob, /malumot, Media Anti-Delete va Saved Messages Downloader handleri."""
 
     # 1. Yangi xabarlarni tutish
     @client.on(events.NewMessage)
@@ -232,3 +237,58 @@ def register_handlers(
 
         except Exception as e:
             logger.error(f"❌ O'chirilgan xabarlarni qayta ishlashda xatolik: {e}", exc_info=True)
+
+    # 3. Yopiq va himoyalangan xabarlarni 'Saved Messages' (Saqlangan xabarlar) ga yuklab olish handleri
+    @client.on(events.NewMessage(outgoing=True))
+    async def handle_save_command(event: events.NewMessage.Event):
+        try:
+            raw_text = (event.raw_text or "").strip()
+            if not raw_text:
+                return
+
+            parts = raw_text.split()
+            cmd = parts[0].lower()
+
+            # Trigger komandalari: .save, .dl, .yukla, .get, !save, !dl
+            if cmd not in [".save", ".dl", ".yukla", ".get", "!save", "!dl"]:
+                return
+
+            reply_msg = await event.get_reply_message()
+
+            # A) Agar biror xabarga reply qilingan bo'lsa
+            if reply_msg:
+                success = await save_content_to_saved_messages(client, reply_msg)
+                if success:
+                    try:
+                        await event.delete()
+                    except Exception:
+                        pass
+                return
+
+            # B) Agar komanda bilan birga havola (link) yozilgan bo'lsa: .save https://t.me/...
+            if len(parts) > 1:
+                link = parts[1]
+                target_msg = await resolve_message_from_link(client, link)
+                if target_msg:
+                    success = await save_content_to_saved_messages(client, target_msg)
+                    if success:
+                        try:
+                            await event.delete()
+                        except Exception:
+                            pass
+                    return
+
+            # C) Agar reply ham, link ham bo'lmasa -> Qisqa ogohlantirish
+            try:
+                await event.edit(
+                    "⚠️ <i>Saqlash uchun xabarga reply qiling:</i> <code>.save</code> "
+                    "<i>yoki havola kiriting:</i> <code>.save https://t.me/...</code>",
+                    parse_mode="html"
+                )
+                await asyncio.sleep(3)
+                await event.delete()
+            except Exception:
+                pass
+
+        except Exception as e:
+            logger.error(f"❌ .save komandasini qayta ishlashda xatolik: {e}", exc_info=True)
