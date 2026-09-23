@@ -500,6 +500,19 @@ class TestDailyAnalyticsAndFeatures(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(mock_client.send_message.called)
         self.assertTrue(mock_event.delete.called)
 
+    async def test_album_and_parallel_messages_rate_limiting(self):
+        rate_limiter = RateLimiter(db=self.db)
+        with patch.object(rate_limiter, "is_workday", return_value=True):
+            # 3 photos in the same album (same grouped_id)
+            album_id = 987654321
+            can_reply_1, _ = await rate_limiter.should_auto_reply(user_id=123, grouped_id=album_id)
+            can_reply_2, _ = await rate_limiter.should_auto_reply(user_id=123, grouped_id=album_id)
+            can_reply_3, _ = await rate_limiter.should_auto_reply(user_id=123, grouped_id=album_id)
+
+            self.assertTrue(can_reply_1)
+            self.assertFalse(can_reply_2)
+            self.assertFalse(can_reply_3)
+
 
 if __name__ == "__main__":
     unittest.main()

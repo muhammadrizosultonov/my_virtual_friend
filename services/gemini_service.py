@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Literal, Optional
@@ -24,9 +25,9 @@ QAT'IY QOIDALAR VA TALABLAR:
 }
 
 2. "auto_reply_text" maydonini shakllantirish shartlari:
-- Asosiy g'oya: "Assalomu alaykum! 👋 Men Muhammadrizoning virtual yordamchisiman 🤖. U ayni vaqtda ishda bo'lganligi sababli javob berishi biroz kechikishi mumkin 💼. Agar zarur yoki shoshilinch xabaringiz bo'lsa, bemalol yozib qoldirishingiz mumkin — albatta yetkazaman! ✨\n\nℹ️ Ish tartibi va vaqtlari haqida bilish uchun: /malumot"
+- Asosiy g'oya: "Assalomu alaykum! 👋 Men Muhammadrizoning virtual yordamchisiman 🤖. U ayni vaqtda ishda bo'lganligi sababli javob berishi biroz kechikishi mumkin 💼. Agar zarur yoki shoshilinch xabaringiz bo'lsa, bemalol yozib qoldirishingiz mumkin — albatta yetkazaman! ✨\n\nℹ️ Ish tartibi va jadval: /malumot"
 - Emojilardan me'yorida va chiroyli foydalaning (masalan: 👋, 🤖, 💼, ⏳, ✨, 📩, 👨‍💻). Matnni vizual jozibali qiling.
-- XABAR OXIRIGA QAT'IY QO'SHILSIN: Har bir avto-javob oxirida yangi qatordan "/malumot" buyrug'ini ko'rsating (masalan: "\n\nℹ️ Ish tartibi va vaqtlari: /malumot").
+- XABAR OXIRIGA QAT'IY QO'SHILSIN: Har bir avto-javob oxirida yangi qatordan "/malumot" buyrug'ini ko'rsating (masalan: "\n\nℹ️ Ish tartibi va jadval: /malumot").
 - Kontekstga moslashuvchanlik:
   • Agar foydalanuvchi "Salom" deb yozsa: do'stona, iliq va samimiy;
   • Agar rasmiy ish taklifi yoki texnik masala bo'lsa: jiddiy, professional va hurmat bilan;
@@ -38,7 +39,7 @@ QAT'IY QOIDALAR VA TALABLAR:
 # Tungi strategik tahlil uchun ko'rsatma
 DAILY_ANALYTICS_SYSTEM_INSTRUCTION = """
 Siz — Muhammadrizoning shaxsiy strategik tahlilchisi va AI yordamchisisiz.
-Vazifangiz: Muhammadrizoning bugungi kun davomida turli shaxslar bilan qilgan yozishmalarini tahlil qilib, unga kun yakuni bo'yicha foydalanuvchiga kun yakuni bo'yicha foydali xulosa, muloqot samaradorligi va xulosalar hisobotini tayyorlab berish.
+Vazifangiz: Muhammadrizoning bugungi kun davomida turli shaxslar bilan qilgan yozishmalarini tahlil qilib, unga kun yakuni bo'yicha foydali xulosa, muloqot samaradorligi va xulosalar hisobotini tayyorlab berish.
 
 Hisobot quyidagi bo'limlardan iborat bo'lsin (Telegram uchun chiroyli HTML formatida):
 <b>1. 📊 KUNNING ASOSIY MAVZULARI:</b>
@@ -57,6 +58,12 @@ Ohang: Do'stona, tahliliy, lo'nda va professional. Keraksiz ortiqcha gaplarsiz, 
 Javobni to'g'ridan-to'g'ri Telegram HTML formatida (<b>, <i>, <code>, <blockquote> teglaridan foydalanib) qaytaring.
 """.strip()
 
+DEFAULT_FALLBACK_MODELS = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-pro-preview"
+]
+
 
 class AiAnalysisResult(BaseModel):
     sender_intent: str = Field(description="Xabarning qisqa maqsadi")
@@ -74,6 +81,57 @@ class GeminiService:
             self.model_name = model_name
         self.client = genai.Client(api_key=self.api_key)
 
+    async def _generate_with_resilience(
+        self,
+        contents: str,
+        system_instruction: str,
+        response_mime_type: Optional[str] = None,
+        temperature: float = 0.7,
+        max_retries_per_model: int = 2
+    ) -> str:
+        """
+        503 UNAVAILABLE, 429 yoki vaqtinchalik yuklamalarni yengish uchun
+        Exponential Backoff va Fallback Modellari (3.6-flash -> 3.5-flash-lite -> 3.1-pro)
+        orqali barqaror so'rov jo'natish.
+        """
+        models_to_try = [self.model_name] + [
+            m for m in DEFAULT_FALLBACK_MODELS if m != self.model_name
+        ]
+
+        last_error = None
+
+        for model in models_to_try:
+            for attempt in range(max_retries_per_model):
+                try:
+                    config = types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=temperature
+                    )
+                    if response_mime_type:
+                        config.response_mime_type = response_mime_type
+
+                    response = await self.client.aio.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=config
+                    )
+                    if response and response.text:
+                        return response.text.strip()
+                except Exception as e:
+                    last_error = e
+                    err_str = str(e)
+                    logger.warning(
+                        f"⚠️ Gemini so'rovida xatolik [Model: {model}, Urinish: {attempt + 1}]: {err_str}"
+                    )
+                    # 503 yoki 429 bo'lsa biroz kutib qayta urinish
+                    if "503" in err_str or "429" in err_str or "UNAVAILABLE" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+                    else:
+                        # 404 yoki boshqa xatolik bo'lsa darhol keyingi modelga o'tish
+                        break
+
+        raise last_error or RuntimeError("Barcha Gemini modellari bilan aloqa o'rnatib bo'lmadi.")
+
     async def analyze_single_message(self, message_text: str, sender_name: str = "") -> AiAnalysisResult:
         """
         Real-time kiruvchi xabarni Gemini AI orqali tahlil qiladi va moslashtirilgan avto-javob qaytaradi.
@@ -81,17 +139,13 @@ class GeminiService:
         prompt = f"Yuboruvchi ismi: {sender_name or 'Noma`lum'}\nKelgan xabar: {message_text}"
 
         try:
-            response = await self.client.aio.models.generate_content(
-                model=self.model_name,
+            response_text = await self._generate_with_resilience(
                 contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=AUTO_REPLY_SYSTEM_INSTRUCTION,
-                    response_mime_type="application/json",
-                    temperature=0.7,
-                )
+                system_instruction=AUTO_REPLY_SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
+                temperature=0.7
             )
 
-            response_text = response.text.strip()
             if response_text.startswith("```json"):
                 response_text = response_text[7:]
             if response_text.startswith("```"):
@@ -109,7 +163,6 @@ class GeminiService:
                 f"ℹ️ Ish tartibi va jadval: /malumot"
             )
 
-            # Agar AI /malumot qo'shishni unutsa, qo'shib qo'yamiz
             if "/malumot" not in auto_reply:
                 auto_reply += "\n\nℹ️ Ish tartibi va jadval: /malumot"
 
@@ -143,16 +196,12 @@ class GeminiService:
         prompt = f"Bugungi yozishmalar stenogrammasi:\n{daily_transcript}"
 
         try:
-            response = await self.client.aio.models.generate_content(
-                model=self.model_name,
+            report_text = await self._generate_with_resilience(
                 contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=DAILY_ANALYTICS_SYSTEM_INSTRUCTION,
-                    temperature=0.4,
-                )
+                system_instruction=DAILY_ANALYTICS_SYSTEM_INSTRUCTION,
+                temperature=0.4
             )
 
-            report_text = response.text.strip()
             if report_text.startswith("```html"):
                 report_text = report_text[7:]
             if report_text.startswith("```"):

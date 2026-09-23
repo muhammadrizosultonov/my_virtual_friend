@@ -161,8 +161,9 @@ def register_handlers(
                     await event.reply(WORK_SCHEDULE_MESSAGE, parse_mode="html")
                     return
 
-                # 3. Kunlik 1 marta avto-javob tekshiruvi
-                can_reply, action_reason = await rate_limiter.should_auto_reply(sender.id)
+                # 3. Kunlik 1 marta avto-javob tekshiruvi (Albom va poyga holatidan himoyalangan)
+                grouped_id = getattr(event, "grouped_id", None) or getattr(event.message, "grouped_id", None)
+                can_reply, action_reason = await rate_limiter.should_auto_reply(sender.id, grouped_id=grouped_id)
                 if can_reply:
                     logger.info(f"🧠 Gemini AI orqali [{contact_name}] uchun mos avto-javob tayyorlanmoqda...")
                     analysis = await gemini_service.analyze_single_message(
