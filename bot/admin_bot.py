@@ -40,12 +40,12 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="👥 Mijozlar ro'yxati", callback_query="menu_clients"),
-                InlineKeyboardButton(text="➕ Mijoz qo'shish", callback_query="add_client")
+                InlineKeyboardButton(text="👥 Mijozlar ro'yxati", callback_data="menu_clients"),
+                InlineKeyboardButton(text="➕ Mijoz qo'shish", callback_data="add_client")
             ],
             [
-                InlineKeyboardButton(text="💳 Yaqin to'lovlar (3 kunlik)", callback_query="menu_upcoming_bills"),
-                InlineKeyboardButton(text="📊 Statistika", callback_query="menu_stats")
+                InlineKeyboardButton(text="💳 Yaqin to'lovlar (3 kunlik)", callback_data="menu_upcoming_bills"),
+                InlineKeyboardButton(text="📊 Statistika", callback_data="menu_stats")
             ]
         ]
     )
@@ -57,15 +57,8 @@ def create_admin_bot(bot_token: str, admin_chat_id: int, db: Database, tz_name: 
     router = Router()
 
     # Admin filtr: Faqat belgilangan admin_chat_id bilan ishlash
-    @router.message.filter(F.from_user.id != admin_chat_id)
-    async def unauthorized_message(message: Message):
-        await message.answer("⛔️ <i>Kechirasiz, ushbu bot faqat administrator uchun mo'ljallangan.</i>", parse_mode=ParseMode.HTML)
-        return False
-
-    @router.callback_query.filter(F.from_user.id != admin_chat_id)
-    async def unauthorized_callback(callback: CallbackQuery):
-        await callback.answer("⛔️ Ruxsat berilmagan!", show_alert=True)
-        return False
+    router.message.filter(F.from_user.id == admin_chat_id)
+    router.callback_query.filter(F.from_user.id == admin_chat_id)
 
     # ==================== ASOSIY MENYU VA START ====================
 
@@ -162,7 +155,7 @@ def create_admin_bot(bot_token: str, admin_chat_id: int, db: Database, tz_name: 
 
         keyboard_buttons.append([
             InlineKeyboardButton(text="🗑 Mijozni o'chirish", callback_data=f"confirm_del_client:{client_id}"),
-            InlineKeyboardButton(text="⬅️ Mijozlar", callback_query="menu_clients")
+            InlineKeyboardButton(text="⬅️ Mijozlar", callback_data="menu_clients")
         ])
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
