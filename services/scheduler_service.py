@@ -79,7 +79,7 @@ class DailyScheduler:
         db: Database,
         gemini_service: GeminiService,
         notifier: MonitoringNotifier,
-        broadcaster: Optional[any] = None,
+        broadcaster=None,
         ad_interval_hours: int = 1,
         tz_name: str = "Asia/Tashkent"
     ):

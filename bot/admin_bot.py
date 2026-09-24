@@ -63,7 +63,7 @@ def create_admin_bot(
     admin_chat_id: int,
     db: Database,
     tz_name: str = "Asia/Tashkent",
-    broadcaster: Optional[any] = None
+    broadcaster=None
 ) -> tuple[Bot, Dispatcher]:
     bot = Bot(token=bot_token)
     dp = Dispatcher(storage=MemoryStorage())
