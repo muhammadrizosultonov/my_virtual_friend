@@ -5,6 +5,7 @@ from typing import Optional
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from database.db import Database
 from services.gemini_service import GeminiService
@@ -71,18 +72,22 @@ async def run_daily_digest(
 
 
 class DailyScheduler:
-    """Har kuni soat 00:00 da tahlilni avtomatik ishga tushiruvchi scheduler."""
+    """Kunlik tahlil, to'lov eslatmalari va avto-reklama vazifalarini boshqaruvchi scheduler."""
 
     def __init__(
         self,
         db: Database,
         gemini_service: GeminiService,
         notifier: MonitoringNotifier,
+        broadcaster: Optional[any] = None,
+        ad_interval_hours: int = 1,
         tz_name: str = "Asia/Tashkent"
     ):
         self.db = db
         self.gemini_service = gemini_service
         self.notifier = notifier
+        self.broadcaster = broadcaster
+        self.ad_interval_hours = ad_interval_hours
         self.tz_name = tz_name
         self.scheduler = AsyncIOScheduler()
 
@@ -92,10 +97,9 @@ class DailyScheduler:
         except Exception:
             tz = pytz.UTC
 
-        # Har kuni soat 00:00 da kechagi kun (tugagan kun) xulosasini tayyorlash
+        # Har kuni soat 00:00 da kechagi kun xulosasini tayyorlash
         async def midnight_job():
             logger.info("🌙 Yarim tun: Kunlik tahlil avtomatik ishga tushdi...")
-            # Soat 00:00 da chaqirilganda, kechagi tugagan kunni tahlil qilish
             yesterday = datetime.now(tz) - timedelta(days=1)
             await run_daily_digest(
                 db=self.db,
@@ -130,8 +134,24 @@ class DailyScheduler:
             replace_existing=True
         )
 
+        # Har 1 soatda nishon guruhlarga avto-reklama tarqatish
+        if self.broadcaster:
+            async def hourly_ad_broadcast_job():
+                logger.info("📢 Har 1 soatlik avto-reklama tekshiruvi ishga tushdi...")
+                await self.broadcaster.broadcast_now(force=False)
+
+            self.scheduler.add_job(
+                hourly_ad_broadcast_job,
+                trigger=IntervalTrigger(hours=self.ad_interval_hours),
+                id="hourly_ad_broadcast_job",
+                replace_existing=True
+            )
+
         self.scheduler.start()
-        logger.info(f"⏰ Scheduler ishga tushdi: 00:00 da tahlil, 09:00 da to'lov eslatmalari ({self.tz_name})")
+        logger.info(
+            f"⏰ Scheduler ishga tushdi: 00:00 da tahlil, 09:00 da to'lov eslatmalari, "
+            f"har {self.ad_interval_hours} soatda avto-reklama ({self.tz_name})"
+        )
 
     def shutdown(self) -> None:
         if self.scheduler.running:

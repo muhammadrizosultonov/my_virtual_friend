@@ -55,17 +55,18 @@ class MonitoringNotifier:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
         return self._session
 
-    async def send_message(self, text: str) -> bool:
-        """Matnni monitoring botga yuborish (kerak bo'lsa qismlarga bo'lib)."""
+    async def send_message(self, text: str, chat_id: Optional[int] = None, parse_mode: str = "HTML") -> bool:
+        """Matnni monitoring botga yoki ko'rsatilgan chatga yuborish (kerak bo'lsa qismlarga bo'lib)."""
         session = await self.get_session()
         chunks = split_message(text)
         success = True
+        target_chat_id = chat_id if chat_id is not None else self.my_chat_id
 
         for chunk in chunks:
             payload = {
-                "chat_id": self.my_chat_id,
+                "chat_id": target_chat_id,
                 "text": chunk,
-                "parse_mode": "HTML",
+                "parse_mode": parse_mode,
                 "disable_web_page_preview": True
             }
 
@@ -76,11 +77,11 @@ class MonitoringNotifier:
                         logger.error(f"❌ Telegram Bot API xatosi [{resp.status}]: {err}")
                         success = False
             except Exception as e:
-                logger.error(f"❌ Hisobot yuborishda xatolik: {e}", exc_info=True)
+                logger.error(f"❌ Xabar yuborishda xatolik: {e}", exc_info=True)
                 success = False
 
         if success:
-            logger.info(f"✅ Monitoring botga xabar yetkazildi (Chat ID: {self.my_chat_id})")
+            logger.info(f"✅ Xabar yetkazildi (Chat ID: {target_chat_id})")
         return success
 
     async def send_instant_alert(
@@ -302,6 +303,60 @@ class MonitoringNotifier:
             )
             logger.error(f"❌ Media faylni o'qish yoki yuklashda xatolik: {e}", exc_info=True)
             return False
+
+    async def send_lead_alert(
+        self,
+        lead_chat_id: int,
+        group_title: str,
+        sender_id: int,
+        sender_name: str,
+        sender_username: Optional[str],
+        service_type: str,
+        task_summary: str,
+        budget: Optional[str],
+        urgency: str,
+        original_text: str,
+        msg_link: Optional[str] = None
+    ) -> bool:
+        """Topilgan yangi mijoz (lead) haqida guruhga va monitoring botga chiroyli xabar yuborish."""
+        safe_name = html.escape(sender_name)
+        safe_group = html.escape(group_title)
+        safe_type = html.escape(service_type)
+        safe_summary = html.escape(task_summary)
+        safe_budget = html.escape(budget) if budget else "<i>Ko'rsatilmagan (Kelishilgan)</i>"
+        safe_urgency = html.escape(urgency)
+
+        username_str = f"@{sender_username}" if sender_username else "<i>Mavjud emas</i>"
+        contact_link = f'<a href="tg://user?id={sender_id}">Lichkaga yozish</a>'
+        msg_link_html = f'<a href="{msg_link}">Guruhdagi xabarni ochish</a>' if msg_link else "<i>Guruh xabari</i>"
+
+        urgency_badge = "🔴 YUQORI" if urgency == "YUQORI" else ("🟡 O'RTA" if urgency == "O'RTA" else "🟢 ODDIY")
+
+        alert_html = f"""
+🎯 <b>YANGI MIJOZ / BUYURTMA TOPILDI!</b>
+
+👥 <b>Guruh:</b> {safe_group}
+👤 <b>Mijoz:</b> {safe_name} ({username_str}) [ID: <code>{sender_id}</code>]
+📌 <b>Yo'nalish:</b> {safe_type}
+📝 <b>Qisqacha talab:</b> {safe_summary}
+💰 <b>Byudjet:</b> {safe_budget}
+⚡️ <b>Shoshilinchlik:</b> {urgency_badge}
+
+💬 <b>Aloqa:</b> {contact_link} | {username_str}
+🔗 <b>Asl xabar:</b> {msg_link_html}
+
+<blockquote>📄 <b>To'liq matn:</b>
+{html.escape(original_text[:500])}</blockquote>
+""".strip()
+
+        # 1. Mijozlar guruhiga (masalan, -1003080764126) yuborish
+        sent_lead = await self.send_message(alert_html, chat_id=lead_chat_id)
+
+        # 2. Agar lead_chat_id monitoring chatdan farq qilsa, admin shaxsiy botiga ham yuborish
+        if lead_chat_id != self.my_chat_id:
+            await self.send_message(alert_html, chat_id=self.my_chat_id)
+
+        return sent_lead
 
     async def close(self) -> None:
         if self._session and not self._session.closed:

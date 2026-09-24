@@ -13,6 +13,8 @@ from services.gemini_service import GeminiService
 from services.notifier import MonitoringNotifier
 from services.rate_limiter import RateLimiter
 from services.scheduler_service import DailyScheduler, run_daily_digest
+from services.sniper_service import LeadSniperService
+from services.broadcaster_service import AdBroadcasterService
 from bot.admin_bot import create_admin_bot
 
 # Loglarni sozlash
@@ -84,30 +86,53 @@ async def main():
         system_lang_code="en"
     )
 
-    # 5. Xabarlarni yig'ish va handlerlarni ulash
+    # 5. Lead Sniper va Ad Broadcaster xizmatlarini initsializatsiya qilish
+    sniper_targets = [g.strip() for g in settings.SNIPER_TARGET_GROUPS.split(",") if g.strip()]
+    ad_targets = [g.strip() for g in settings.AD_TARGET_GROUPS.split(",") if g.strip()]
+
+    sniper_service = LeadSniperService(
+        client=client,
+        db=db,
+        gemini_service=gemini_service,
+        notifier=notifier,
+        lead_chat_id=settings.LEAD_DESTINATION_CHAT_ID,
+        target_group_names=sniper_targets
+    )
+
+    broadcaster = AdBroadcasterService(
+        client=client,
+        db=db,
+        target_group_names=ad_targets
+    )
+
+    # 6. Xabarlarni yig'ish va handlerlarni ulash
     register_handlers(
         client=client,
         db=db,
         gemini_service=gemini_service,
         rate_limiter=rate_limiter,
-        notifier=notifier
+        notifier=notifier,
+        sniper_service=sniper_service
     )
 
-    # 6. Schedulerni ishga tushirish (00:00 tahlil, 09:00 to'lov eslatmalari)
+    # 7. Schedulerni ishga tushirish (00:00 tahlil, 09:00 to'lov eslatmalari, har 1 soatda avto-reklama)
     scheduler = DailyScheduler(
         db=db,
         gemini_service=gemini_service,
         notifier=notifier,
+        broadcaster=broadcaster,
+        ad_interval_hours=settings.AD_BROADCAST_INTERVAL_HOURS,
         tz_name=settings.TIMEZONE
     )
     scheduler.start()
 
-    # 7. Aiogram Admin Botni initsializatsiya qilish
+    # 8. Aiogram Admin Botni initsializatsiya qilish
     admin_bot, dp = create_admin_bot(
         bot_token=settings.BOT_TOKEN,
         admin_chat_id=settings.MY_CHAT_ID,
         db=db,
-        tz_name=settings.TIMEZONE
+        tz_name=settings.TIMEZONE,
+        broadcaster=broadcaster
     )
 
     async def run_userbot():

@@ -36,6 +36,10 @@ class ServerStates(StatesGroup):
     waiting_for_day = State()
 
 
+class AdStates(StatesGroup):
+    waiting_for_ad_text = State()
+
+
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -46,12 +50,21 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="💳 Yaqin to'lovlar (3 kunlik)", callback_data="menu_upcoming_bills"),
                 InlineKeyboardButton(text="📊 Statistika", callback_data="menu_stats")
+            ],
+            [
+                InlineKeyboardButton(text="🎯 Lead Sniper & Reklama", callback_data="menu_sniper_ads")
             ]
         ]
     )
 
 
-def create_admin_bot(bot_token: str, admin_chat_id: int, db: Database, tz_name: str = "Asia/Tashkent") -> tuple[Bot, Dispatcher]:
+def create_admin_bot(
+    bot_token: str,
+    admin_chat_id: int,
+    db: Database,
+    tz_name: str = "Asia/Tashkent",
+    broadcaster: Optional[any] = None
+) -> tuple[Bot, Dispatcher]:
     bot = Bot(token=bot_token)
     dp = Dispatcher(storage=MemoryStorage())
     router = Router()
@@ -420,6 +433,117 @@ def create_admin_bot(bot_token: str, admin_chat_id: int, db: Database, tz_name: 
         except Exception:
             await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         await callback.answer()
+
+    # ==================== LEAD SNIPER VA REKLAMA BO'LIMI ====================
+
+    @router.callback_query(F.data == "menu_sniper_ads")
+    async def cb_menu_sniper_ads(callback: CallbackQuery):
+        sniper_status = await db.get_setting("sniper_enabled", "1")
+        ad_status = await db.get_setting("ad_enabled", "1")
+        lead_chat = await db.get_setting("lead_chat_id", "-1003080764126")
+
+        total_leads = await db.get_leads_count(today_only=False)
+        today_leads = await db.get_leads_count(today_only=True, tz_name=tz_name)
+
+        sniper_badge = "🟢 Faol (24/7)" if sniper_status == "1" else "🔴 O'chirilgan"
+        ad_badge = "🟢 Faol (Har 1 soatda)" if ad_status == "1" else "🔴 O'chirilgan"
+
+        custom_ad = await db.get_setting("ad_text")
+        ad_preview = (custom_ad[:150] + "...") if custom_ad else "Standart IT Xizmatlari reklamasi"
+
+        text = (
+            "🎯 <b>LEAD SNIPER VA GURUHLARGA AVTO-REKLAMA</b>\n\n"
+            f"🎯 <b>Lead Sniper holati:</b> {sniper_badge}\n"
+            f"📢 <b>Avto-Reklama holati:</b> {ad_badge}\n"
+            f"📥 <b>Mijozlar tashlanadigan guruh:</b> <code>{lead_chat}</code>\n"
+            f"👥 <b>Nishon guruhlar:</b>\n"
+            f"  1. <i>O'rtada turib berish</i>\n"
+            f"  2. <i>BIZNES PLUS</i>\n"
+            f"  3. <i>uzbekadmins</i>\n\n"
+            f"📊 <b>Topilgan buyurtmalar:</b> Bugun: <b>{today_leads} ta</b> | Jami: <b>{total_leads} ta</b>\n\n"
+            f"📄 <b>Amaldagi reklama matni preview:</b>\n"
+            f"<i>{ad_preview}</i>"
+        )
+
+        sniper_btn_text = "🔴 Sniperni o'chirish" if sniper_status == "1" else "🟢 Sniperni yoqish"
+        ad_btn_text = "🔴 Reklamani to'xtatish" if ad_status == "1" else "🟢 Reklamani yoqish"
+
+        buttons = [
+            [
+                InlineKeyboardButton(text=sniper_btn_text, callback_data="toggle_sniper"),
+                InlineKeyboardButton(text=ad_btn_text, callback_data="toggle_ad")
+            ],
+            [
+                InlineKeyboardButton(text="🚀 Hozir reklama tarqatish", callback_data="broadcast_now_act"),
+                InlineKeyboardButton(text="📝 Reklama matnini o'zgartirish", callback_data="edit_ad_text")
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ Asosiy menyu", callback_data="main_menu")
+            ]
+        ]
+
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        except Exception:
+            await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        await callback.answer()
+
+    @router.callback_query(F.data == "toggle_sniper")
+    async def cb_toggle_sniper(callback: CallbackQuery):
+        curr = await db.get_setting("sniper_enabled", "1")
+        new_val = "0" if curr == "1" else "1"
+        await db.set_setting("sniper_enabled", new_val)
+        status_word = "yoqildi" if new_val == "1" else "o'chirildi"
+        await callback.answer(f"🎯 Lead Sniper {status_word}!", show_alert=True)
+        await cb_menu_sniper_ads(callback)
+
+    @router.callback_query(F.data == "toggle_ad")
+    async def cb_toggle_ad(callback: CallbackQuery):
+        curr = await db.get_setting("ad_enabled", "1")
+        new_val = "0" if curr == "1" else "1"
+        await db.set_setting("ad_enabled", new_val)
+        status_word = "yoqildi" if new_val == "1" else "to'xtatildi"
+        await callback.answer(f"📢 Avto-reklama {status_word}!", show_alert=True)
+        await cb_menu_sniper_ads(callback)
+
+    @router.callback_query(F.data == "broadcast_now_act")
+    async def cb_broadcast_now(callback: CallbackQuery):
+        if not broadcaster:
+            await callback.answer("⚠️ Reklama xizmati ulanmagan.", show_alert=True)
+            return
+
+        await callback.answer("🚀 Reklama tarqatish boshlandi... Kuting!", show_alert=False)
+        sent, errs, report = await broadcaster.broadcast_now(force=True)
+        await callback.message.answer(
+            f"📢 <b>Reklama tarqatish natijasi:</b>\n\n{report}",
+            parse_mode=ParseMode.HTML
+        )
+
+    @router.callback_query(F.data == "edit_ad_text")
+    async def cb_edit_ad_text(callback: CallbackQuery, state: FSMContext):
+        await state.set_state(AdStates.waiting_for_ad_text)
+        cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Bekor qilish", callback_data="menu_sniper_ads")]])
+        await callback.message.answer(
+            "📝 <b>Yangi reklama matnini yuboring:</b>\n"
+            "<i>(Formatlash uchun HTML teglaridan foydalanishingiz mumkin: &lt;b&gt;, &lt;i&gt;)</i>",
+            reply_markup=cancel_kb,
+            parse_mode=ParseMode.HTML
+        )
+        await callback.answer()
+
+    @router.message(AdStates.waiting_for_ad_text)
+    async def process_new_ad_text(message: Message, state: FSMContext):
+        new_text = message.text or message.caption or ""
+        if not new_text.strip():
+            await message.answer("⚠️ Iltimos, reklama matnini yozing:")
+            return
+
+        await db.set_setting("ad_text", new_text.strip())
+        await state.clear()
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🎯 Lead Sniper & Reklama", callback_data="menu_sniper_ads")]])
+        await message.answer("✅ <b>Reklama matni muvaffaqiyatli yangilandi!</b>", reply_markup=kb, parse_mode=ParseMode.HTML)
 
     dp.include_router(router)
     return bot, dp

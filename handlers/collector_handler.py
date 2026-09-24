@@ -73,11 +73,19 @@ def register_handlers(
     db: Database,
     gemini_service: GeminiService,
     rate_limiter: RateLimiter,
-    notifier: MonitoringNotifier
+    notifier: MonitoringNotifier,
+    sniper_service: Optional[any] = None
 ) -> None:
-    """Xabarlarni yig'ish, media/TTL yuklash, avto-javob, /malumot, Media Anti-Delete va Saved Messages Downloader handleri."""
+    """Xabarlarni yig'ish, media/TTL yuklash, avto-javob, /malumot, Lead Sniper va Saved Messages Downloader handleri."""
 
-    # 1. Yangi xabarlarni tutish
+    # 1. Guruhlardagi yangi xabarlarni tutish va Lead Sniper tahlilidan o'tkazish
+    if sniper_service:
+        @client.on(events.NewMessage)
+        async def handle_group_lead_message(event: events.NewMessage.Event):
+            if not event.is_private and not event.out:
+                await sniper_service.process_incoming_group_message(event)
+
+    # 2. Yangi shaxsiy xabarlarni tutish
     @client.on(events.NewMessage)
     async def handle_private_message(event: events.NewMessage.Event):
         try:

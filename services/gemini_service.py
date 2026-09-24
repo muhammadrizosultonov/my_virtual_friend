@@ -58,6 +58,27 @@ Ohang: Do'stona, tahliliy, lo'nda va professional. Keraksiz ortiqcha gaplarsiz, 
 Javobni to'g'ridan-to'g'ri Telegram HTML formatida (<b>, <i>, <code>, <blockquote> teglaridan foydalanib) qaytaring.
 """.strip()
 
+LEAD_DETECTION_SYSTEM_INSTRUCTION = """
+Siz — professional IT Lead Detector va Buyurtma tahlilchisisiz.
+Vazifangiz: Berilgan Telegram guruh xabarini chuqur tahlil qilib, xabar egasi haqiqatan ham mijoz sifatida IT xizmat (Telegram bot, veb-sayt, Python backend, server/VPS sozlash, CRM yoki dasturchi mutaxassis) QIDIRAYOTGANINI aniqlash.
+
+QAT'IY QOIDALAR:
+1. is_lead=true bo'lishi uchun:
+   - Xabarda aniq buyurtma, loyiha yoki dasturchi qidirilayotgan bo'lishi shart (masalan: "bot kerak", "sayt qildirmoqchiman", "python biladigan bormi proyekt bor", "server ko'tarish kerak", "dasturchi kerak", "zakaz bor", "vps kerak").
+2. is_lead=false bo'lishi SHART:
+   - Agar foydalanuvchi O'ZI ISH QIDIRAYOTGAN bo'lsa (rezyume, "ish kerak", "frilanserman ish bormi", "tajribam 2 yil ish qidiryapman");
+   - Agar oddiy dasturlash savoli, yordam so'rash ("kodimdagi xatoni toping", "qaysi hosting yaxshi"), spam yoki kanal reklamasi bo'lsa.
+
+Javobingiz FAQAT quyidagi JSON formatida bo'lsin:
+{
+  "is_lead": true,
+  "service_type": "Telegram Bot",
+  "task_summary": "Telegramda Click/Payme integratsiyali savdo boti yasatmoqchi",
+  "budget": "$100",
+  "urgency": "YUQORI"
+}
+""".strip()
+
 DEFAULT_FALLBACK_MODELS = [
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
@@ -70,6 +91,14 @@ class AiAnalysisResult(BaseModel):
     urgency: Literal["YUQORI", "O'RTA", "PAST"] = Field(description="Xabar shoshilinchligi")
     summary: str = Field(description="Xabarning 1-2 jumlalik qisqa mazmuni")
     auto_reply_text: str = Field(description="Foydalanuvchiga yuboriladigan samimiy javob matni")
+
+
+class LeadAnalysisResult(BaseModel):
+    is_lead: bool = Field(description="Haqiqiy buyurtmachimi?")
+    service_type: str = Field(default="Boshqa IT", description="Xizmat yo'nalishi")
+    task_summary: str = Field(default="IT xizmat talabi", description="Buyurtma xulosasi")
+    budget: Optional[str] = Field(default=None, description="Byudjet yoki narx")
+    urgency: Literal["YUQORI", "O'RTA", "ODDIY"] = Field(default="O'RTA", description="Shoshilinchlik darajasi")
 
 
 class GeminiService:
@@ -214,3 +243,44 @@ class GeminiService:
         except Exception as e:
             logger.error(f"❌ Gemini tahlilida xatolik: {e}", exc_info=True)
             return f"⚠️ <i>Gemini AI tahlilini tayyorlashda xatolik yuz berdi: {e}</i>"
+
+    async def analyze_lead_message(
+        self,
+        message_text: str,
+        group_title: Optional[str] = None,
+        sender_name: Optional[str] = None
+    ) -> Optional[LeadAnalysisResult]:
+        """
+        Telegram guruhdan tutilgan xabarni tahlil qilib, haqiqiy mijoz/buyurtma ekanligini aniqlash.
+        """
+        if not message_text.strip():
+            return None
+
+        prompt = f"Guruh: {group_title or 'Noma\'lum guruh'}\nJo'natuvchi: {sender_name or 'Foydalanuvchi'}\nXabar matni:\n\"\"\"{message_text}\"\"\""
+
+        try:
+            raw_json = await self._generate_with_resilience(
+                contents=prompt,
+                system_instruction=LEAD_DETECTION_SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
+                temperature=0.2
+            )
+
+            if raw_json.startswith("```json"):
+                raw_json = raw_json[7:]
+            if raw_json.startswith("```"):
+                raw_json = raw_json[3:]
+            if raw_json.endswith("```"):
+                raw_json = raw_json[:-3]
+
+            parsed = json.loads(raw_json.strip())
+            return LeadAnalysisResult(
+                is_lead=bool(parsed.get("is_lead", False)),
+                service_type=str(parsed.get("service_type", "Boshqa IT")),
+                task_summary=str(parsed.get("task_summary", message_text[:100])),
+                budget=parsed.get("budget"),
+                urgency=parsed.get("urgency", "O'RTA")
+            )
+        except Exception as e:
+            logger.error(f"❌ Gemini Lead tahlilida xatolik: {e}", exc_info=True)
+            return None

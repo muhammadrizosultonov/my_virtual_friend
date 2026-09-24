@@ -82,6 +82,30 @@ class Database:
             )
         """)
         await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                chat_title TEXT,
+                sender_id INTEGER NOT NULL,
+                sender_name TEXT,
+                username TEXT,
+                message_id INTEGER NOT NULL,
+                original_text TEXT,
+                service_type TEXT,
+                task_summary TEXT,
+                budget TEXT,
+                urgency TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_messages_chat_time 
             ON messages(chat_id, created_at)
         """)
@@ -100,6 +124,14 @@ class Database:
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_servers_payment_day
             ON client_servers(payment_day)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_leads_chat_msg
+            ON leads(chat_id, message_id)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_leads_time
+            ON leads(created_at)
         """)
         await self._db.commit()
 
@@ -497,6 +529,112 @@ class Database:
         """) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
+
+    # ==================== LEAD SNIPER & SETTINGS ====================
+
+    async def save_lead(
+        self,
+        chat_id: int,
+        chat_title: Optional[str],
+        sender_id: int,
+        sender_name: str,
+        username: Optional[str],
+        message_id: int,
+        original_text: str,
+        service_type: str,
+        task_summary: str,
+        budget: Optional[str] = None,
+        urgency: Optional[str] = None
+    ) -> int:
+        """Topilgan yangi mijoz (lead) ma'lumotlarini bazaga saqlash."""
+        if not self._db:
+            return 0
+        cursor = await self._db.execute(
+            """
+            INSERT INTO leads (
+                chat_id, chat_title, sender_id, sender_name, username, message_id,
+                original_text, service_type, task_summary, budget, urgency
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                chat_id, chat_title, sender_id, sender_name, username, message_id,
+                original_text, service_type, task_summary, budget, urgency
+            )
+        )
+        await self._db.commit()
+        return cursor.lastrowid or 0
+
+    async def is_lead_saved(self, chat_id: int, message_id: int) -> bool:
+        """Ushbu xabar allaqachon lead sifatida saqlanganligini tekshirish."""
+        if not self._db:
+            return False
+        async with self._db.execute(
+            "SELECT 1 FROM leads WHERE chat_id = ? AND message_id = ?",
+            (chat_id, message_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row is not None
+
+    async def get_leads_count(self, today_only: bool = False, tz_name: str = "Asia/Tashkent") -> int:
+        """Jami yoki bugungi topilgan leadlar sonini olish."""
+        if not self._db:
+            return 0
+        if today_only:
+            try:
+                import pytz
+                tz = pytz.timezone(tz_name)
+                today_str = datetime.now(tz).strftime("%Y-%m-%d")
+            except Exception:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+
+            async with self._db.execute(
+                "SELECT COUNT(*) as count FROM leads WHERE created_at LIKE ?",
+                (f"{today_str}%",)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row["count"] if row else 0
+        else:
+            async with self._db.execute("SELECT COUNT(*) as count FROM leads") as cursor:
+                row = await cursor.fetchone()
+                return row["count"] if row else 0
+
+    async def get_recent_leads(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Oxirgi topilgan mijozlar ro'yxatini olish."""
+        if not self._db:
+            return []
+        async with self._db.execute(
+            """
+            SELECT id, chat_id, chat_title, sender_id, sender_name, username, message_id,
+                   original_text, service_type, task_summary, budget, urgency, created_at
+            FROM leads
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Tizim sozlamasini olish."""
+        if not self._db:
+            return default
+        async with self._db.execute(
+            "SELECT value FROM bot_settings WHERE key = ?",
+            (key,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row["value"] if row else default
+
+    async def set_setting(self, key: str, value: str) -> None:
+        """Tizim sozlamasini yozish yoki yangilash."""
+        if not self._db:
+            return
+        await self._db.execute(
+            "INSERT OR REPLACE INTO bot_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+            (key, value)
+        )
+        await self._db.commit()
 
     async def close(self) -> None:
         if self._db:
