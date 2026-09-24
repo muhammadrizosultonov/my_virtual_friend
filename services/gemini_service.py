@@ -66,7 +66,6 @@ QAT'IY QOIDALAR:
 1. is_lead=true bo'lishi uchun:
    - Xabarda aniq buyurtma, loyiha yoki dasturchi qidirilayotgan bo'lishi shart (masalan: "bot kerak", "sayt qildirmoqchiman", "python biladigan bormi proyekt bor", "server ko'tarish kerak", "dasturchi kerak", "zakaz bor", "vps kerak").
 2. is_lead=false bo'lishi SHART:
-   - Agar foydalanuvchi O'Z XIZMATINI TAKLIF QILAYOTGAN yoki REKLAMA QILAYOTGAN bo'lsa (masalan: "Bot kerakmi?", "Sayt ochib beramiz", "Biznesingiz uchun botlar", "Dasturchilik xizmati");
    - Agar foydalanuvchi O'ZI ISH QIDIRAYOTGAN bo'lsa (rezyume, "ish kerak", "frilanserman ish bormi", "tajribam 2 yil ish qidiryapman");
    - Agar oddiy dasturlash savoli, yordam so'rash ("kodimdagi xatoni toping", "qaysi hosting yaxshi"), spam yoki kanal reklamasi bo'lsa.
 
@@ -99,7 +98,7 @@ class LeadAnalysisResult(BaseModel):
     service_type: str = Field(default="Boshqa IT", description="Xizmat yo'nalishi")
     task_summary: str = Field(default="IT xizmat talabi", description="Buyurtma xulosasi")
     budget: Optional[str] = Field(default=None, description="Byudjet yoki narx")
-    urgency: str = Field(default="O'RTA", description="Shoshilinchlik darajasi")
+    urgency: Literal["YUQORI", "O'RTA", "ODDIY"] = Field(default="O'RTA", description="Shoshilinchlik darajasi")
 
 
 class GeminiService:
@@ -275,20 +274,12 @@ class GeminiService:
                 raw_json = raw_json[:-3]
 
             parsed = json.loads(raw_json.strip())
-            raw_urg = str(parsed.get("urgency", "O'RTA")).upper()
-            if "YUQORI" in raw_urg or "HIGH" in raw_urg:
-                urgency = "YUQORI"
-            elif "PAST" in raw_urg or "LOW" in raw_urg or "ODDIY" in raw_urg:
-                urgency = "ODDIY"
-            else:
-                urgency = "O'RTA"
-
             return LeadAnalysisResult(
                 is_lead=bool(parsed.get("is_lead", False)),
                 service_type=str(parsed.get("service_type", "Boshqa IT")),
                 task_summary=str(parsed.get("task_summary", message_text[:100])),
                 budget=parsed.get("budget"),
-                urgency=urgency
+                urgency=parsed.get("urgency", "O'RTA")
             )
         except Exception as e:
             logger.error(f"❌ Gemini Lead tahlilida xatolik: {e}", exc_info=True)
