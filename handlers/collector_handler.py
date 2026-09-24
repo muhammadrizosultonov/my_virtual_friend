@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
 from telethon import TelegramClient, events
 from telethon.tl.types import User
 from database.db import Database
