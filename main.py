@@ -13,6 +13,7 @@ from services.gemini_service import GeminiService
 from services.notifier import MonitoringNotifier
 from services.rate_limiter import RateLimiter
 from services.scheduler_service import DailyScheduler, run_daily_digest
+from bot.admin_bot import create_admin_bot
 
 # Loglarni sozlash
 logging.basicConfig(
@@ -83,7 +84,7 @@ async def main():
         system_lang_code="en"
     )
 
-    # 5. Xabarlarni yig'ish va 1 kunda 1 marta avto-javob handlerini ulash
+    # 5. Xabarlarni yig'ish va handlerlarni ulash
     register_handlers(
         client=client,
         db=db,
@@ -92,7 +93,7 @@ async def main():
         notifier=notifier
     )
 
-    # 6. Tungi 00:00 da hisobot yuboruvchi schedulerni ishga tushirish
+    # 6. Schedulerni ishga tushirish (00:00 tahlil, 09:00 to'lov eslatmalari)
     scheduler = DailyScheduler(
         db=db,
         gemini_service=gemini_service,
@@ -101,32 +102,36 @@ async def main():
     )
     scheduler.start()
 
-    # Graceful shutdown hodisalari
-    stop_event = asyncio.Event()
+    # 7. Aiogram Admin Botni initsializatsiya qilish
+    admin_bot, dp = create_admin_bot(
+        bot_token=settings.BOT_TOKEN,
+        admin_chat_id=settings.MY_CHAT_ID,
+        db=db,
+        tz_name=settings.TIMEZONE
+    )
 
-    def signal_handler():
-        logger.warning("🛑 To'xtatish signali qabul qilindi. Resurslar tozalanmoqda...")
-        stop_event.set()
-
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, signal_handler)
-        except NotImplementedError:
-            pass
-
-    try:
-        logger.info("📱 Telegram mijoziga ulanish tekshirilmoqda...")
+    async def run_userbot():
+        logger.info("📱 Telegram Userbot ulanish tekshirilmoqda...")
         await client.start(phone=settings.TELEGRAM_PHONE)
         me = await client.get_me()
         logger.info(
-            f"✨ Muvaffaqiyatli ulandi! Akkaunt: {me.first_name} {me.last_name or ''} "
+            f"✨ Userbot ulandi! Akkaunt: {me.first_name} {me.last_name or ''} "
             f"(@{me.username or 'NoUsername'}) [ID: {me.id}]"
         )
-        logger.info("🟢 Userbot xabarlarni qabul qilmoqda (1 kunda 1 marta AI avto-javob faol)...")
-        logger.info(f"⏰ Har kuni soat 00:00 da ({settings.TIMEZONE}) umumiy kunlik tahlil botga boradi.")
-
+        logger.info("🟢 Userbot xabarlarni qabul qilmoqda...")
         await client.run_until_disconnected()
+
+    async def run_admin_bot():
+        logger.info("🤖 Admin Bot (Aiogram) ishga tushirilmoqda...")
+        await admin_bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(admin_bot)
+
+    try:
+        # Userbot va Admin Botni bir vaqtda parallel ishlatish
+        await asyncio.gather(
+            run_userbot(),
+            run_admin_bot()
+        )
 
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot to'xtatildi.")
@@ -137,6 +142,8 @@ async def main():
         scheduler.shutdown()
         if client.is_connected():
             await client.disconnect()
+        if admin_bot.session:
+            await admin_bot.session.close()
         await notifier.close()
         await db.close()
         logger.info("👋 Tizim to'liq to'xtatildi.")

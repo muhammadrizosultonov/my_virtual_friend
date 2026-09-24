@@ -10,6 +10,7 @@ from database.db import Database
 from services.gemini_service import GeminiService
 from services.notifier import MonitoringNotifier
 from services.stats_service import format_stats_header, prepare_daily_transcript
+from services.billing_service import check_and_send_billing_reminders
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +113,25 @@ class DailyScheduler:
             id="daily_digest_job",
             replace_existing=True
         )
+
+        # Har kuni soat 09:00 da oylik server to'lovlari eslatmasi (3 kunlik ogohlantirish)
+        async def morning_billing_job():
+            logger.info("☀️ Ertalabki to'lov eslatmalari tekshiruvi ishga tushdi...")
+            await check_and_send_billing_reminders(
+                db=self.db,
+                notifier=self.notifier,
+                tz_name=self.tz_name
+            )
+
+        self.scheduler.add_job(
+            morning_billing_job,
+            trigger=CronTrigger(hour=9, minute=0, timezone=tz),
+            id="morning_billing_job",
+            replace_existing=True
+        )
+
         self.scheduler.start()
-        logger.info(f"⏰ Scheduler ishga tushdi: Har kuni soat 00:00 da ({self.tz_name}) tahlil yuboriladi.")
+        logger.info(f"⏰ Scheduler ishga tushdi: 00:00 da tahlil, 09:00 da to'lov eslatmalari ({self.tz_name})")
 
     def shutdown(self) -> None:
         if self.scheduler.running:

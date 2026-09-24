@@ -62,6 +62,26 @@ class Database:
             )
         """)
         await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS clients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                contact_info TEXT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS client_servers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                server_name TEXT NOT NULL,
+                price TEXT NOT NULL,
+                payment_day INTEGER NOT NULL,
+                notes TEXT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients (id) ON DELETE CASCADE
+            )
+        """)
+        await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_messages_chat_time 
             ON messages(chat_id, created_at)
         """)
@@ -72,6 +92,14 @@ class Database:
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_messages_time 
             ON messages(created_at)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_servers_client_id
+            ON client_servers(client_id)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_servers_payment_day
+            ON client_servers(payment_day)
         """)
         await self._db.commit()
 
@@ -332,6 +360,141 @@ class Database:
             """,
             (start_str, limit)
         ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    # ==================== MIJOZLAR (CLIENTS) VA SERVERLAR CRUD ====================
+
+    async def add_client(self, name: str, contact_info: Optional[str] = None) -> int:
+        """Yangi mijoz qo'shadi va uning ID sini qaytaradi."""
+        if not self._db:
+            return 0
+        cursor = await self._db.execute(
+            "INSERT INTO clients (name, contact_info) VALUES (?, ?)",
+            (name.strip(), (contact_info or "").strip() or None)
+        )
+        await self._db.commit()
+        return cursor.lastrowid
+
+    async def get_clients(self) -> List[Dict[str, Any]]:
+        """Barcha mijozlar ro'yxatini va ularga tegishli serverlar sonini oladi."""
+        if not self._db:
+            return []
+        async with self._db.execute("""
+            SELECT 
+                c.id,
+                c.name,
+                c.contact_info,
+                c.created_at,
+                COUNT(s.id) as servers_count
+            FROM clients c
+            LEFT JOIN client_servers s ON c.id = s.client_id
+            GROUP BY c.id
+            ORDER BY c.id DESC
+        """) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def get_client_by_id(self, client_id: int) -> Optional[Dict[str, Any]]:
+        """Mijozni ID bo'yicha qidirish."""
+        if not self._db:
+            return None
+        async with self._db.execute(
+            "SELECT id, name, contact_info, created_at FROM clients WHERE id = ?",
+            (client_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def delete_client(self, client_id: int) -> bool:
+        """Mijozni va unga tegishli barcha serverlarni o'chirish."""
+        if not self._db:
+            return False
+        await self._db.execute("DELETE FROM client_servers WHERE client_id = ?", (client_id,))
+        cursor = await self._db.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+        await self._db.commit()
+        return cursor.rowcount > 0
+
+    async def add_server(
+        self,
+        client_id: int,
+        server_name: str,
+        price: str,
+        payment_day: int,
+        notes: Optional[str] = None
+    ) -> int:
+        """Mijozga yangi server qo'shish."""
+        if not self._db:
+            return 0
+        cursor = await self._db.execute(
+            """
+            INSERT INTO client_servers (client_id, server_name, price, payment_day, notes)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (client_id, server_name.strip(), price.strip(), payment_day, (notes or "").strip() or None)
+        )
+        await self._db.commit()
+        return cursor.lastrowid
+
+    async def get_client_servers(self, client_id: int) -> List[Dict[str, Any]]:
+        """Mijozga biriktirilgan barcha serverlarni olish."""
+        if not self._db:
+            return []
+        async with self._db.execute(
+            """
+            SELECT id, client_id, server_name, price, payment_day, notes, created_at
+            FROM client_servers
+            WHERE client_id = ?
+            ORDER BY payment_day ASC
+            """,
+            (client_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def get_server_by_id(self, server_id: int) -> Optional[Dict[str, Any]]:
+        """Serverni ID bo'yicha olish."""
+        if not self._db:
+            return None
+        async with self._db.execute(
+            """
+            SELECT s.id, s.client_id, s.server_name, s.price, s.payment_day, s.notes, s.created_at,
+                   c.name as client_name, c.contact_info as client_contact
+            FROM client_servers s
+            JOIN clients c ON s.client_id = c.id
+            WHERE s.id = ?
+            """,
+            (server_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def delete_server(self, server_id: int) -> bool:
+        """Serverni o'chirish."""
+        if not self._db:
+            return False
+        cursor = await self._db.execute("DELETE FROM client_servers WHERE id = ?", (server_id,))
+        await self._db.commit()
+        return cursor.rowcount > 0
+
+    async def get_all_servers_with_clients(self) -> List[Dict[str, Any]]:
+        """Barcha serverlar va ularning mijozlari ma'lumotlarini olish."""
+        if not self._db:
+            return []
+        async with self._db.execute("""
+            SELECT 
+                s.id as server_id,
+                s.server_name,
+                s.price,
+                s.payment_day,
+                s.notes,
+                c.id as client_id,
+                c.name as client_name,
+                c.contact_info
+            FROM client_servers s
+            JOIN clients c ON s.client_id = c.id
+            ORDER BY s.payment_day ASC
+        """) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
