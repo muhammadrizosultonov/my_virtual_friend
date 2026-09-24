@@ -175,17 +175,6 @@ def register_handlers(
                     await event.reply(analysis.auto_reply_text)
                     await rate_limiter.record_reply(sender.id)
                     logger.info(f"✨ Foydalanuvchiga avto-javob yuborildi ({sender.id})")
-
-                    # Monitoring botga real-time hisobot yuborish
-                    await notifier.send_instant_alert(
-                        sender_id=sender.id,
-                        sender_name=contact_name,
-                        sender_username=username,
-                        original_text=text,
-                        analysis=analysis,
-                        action_status="Avto-javob yuborildi ✅",
-                        reply_sent=True
-                    )
                 else:
                     logger.debug(f"Avto-javob yuborilmadi: {action_reason}")
 

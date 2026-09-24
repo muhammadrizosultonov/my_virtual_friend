@@ -10,25 +10,16 @@ logger = logging.getLogger(__name__)
 
 class RateLimiter:
     """
-    Ish kunlari (Dushanba-Juma) va ish vaqti (09:00 - 18:00) nazorati hamda har bir
-    foydalanuvchiga kuniga faqat 1 marta avto-javob qaytarish cheklovini boshqaruvchi servis
-    (Race condition va albomlar debouncing bilan).
+    Ish kunlari nazorati va har bir foydalanuvchiga kuniga faqat 1 marta avto-javob
+    qaytarish cheklovini boshqaruvchi servis (Race condition va albomlar debouncing bilan).
     """
 
-    def __init__(
-        self,
-        db: Database,
-        tz_name: str = "Asia/Tashkent",
-        work_start_hour: int = 9,
-        work_end_hour: int = 18
-    ):
+    def __init__(self, db: Database, tz_name: str = "Asia/Tashkent"):
         self.db = db
         try:
             self.tz = pytz.timezone(tz_name)
         except Exception:
             self.tz = pytz.UTC
-        self.work_start_hour = work_start_hour
-        self.work_end_hour = work_end_hour
         self._user_locks: dict[int, asyncio.Lock] = {}
         self._processed_albums: set[int] = set()
 
@@ -38,13 +29,6 @@ class RateLimiter:
     def is_workday(self) -> bool:
         """Faqat Dushanba (0) dan Juma (4) gacha bo'lgan kunlarni ruxsat etadi."""
         return 0 <= self._get_now().weekday() <= 4
-
-    def is_work_hours(self) -> bool:
-        """Faqat 09:00 dan 18:00 gacha bo'lgan vaqt oralig'ini ruxsat etadi."""
-        now = self._get_now()
-        start_time = now.replace(hour=self.work_start_hour, minute=0, second=0, microsecond=0)
-        end_time = now.replace(hour=self.work_end_hour, minute=0, second=0, microsecond=0)
-        return start_time <= now <= end_time
 
     def get_today_date_str(self) -> str:
         """Bugungi sana: YYYY-MM-DD."""
@@ -57,21 +41,14 @@ class RateLimiter:
 
     async def should_auto_reply(self, user_id: int, grouped_id: int | None = None) -> Tuple[bool, str]:
         """
-        Avto-javob berish mumkinligini tekshiradi:
-        1. Faqat ish kunlari (Dushanba - Juma);
-        2. Faqat ish vaqtida (09:00 dan 18:00 gacha);
-        3. Har bir foydalanuvchiga 1 kunda faqat 1 marta;
-        4. Albomlar va parallel xabarlarda faqat 1 marta (debouncing).
+        Avto-javob berish mumkinligini tekshiradi va poyga holati (race condition) hamda
+        bir nechta rasm/albom kelganda takrorlanishning oldini oladi.
         """
         # 1. Dam olish kunlari tekshiruvi
         if not self.is_workday():
             return False, "Dam olish kuni (Shanba/Yakshanba): Avto-javob yuborilmadi"
 
-        # 2. Ish vaqti tekshiruvi (09:00 dan 18:00 gacha)
-        if not self.is_work_hours():
-            return False, "Ish vaqtidan tashqari vaqt (Faqat 09:00 - 18:00 oralig'ida yuboriladi)"
-
-        # 3. Agar albom (grouped_id) bo'lsa va bu albomga allaqachon javob berilgan bo'lsa
+        # 2. Agar albom (grouped_id) bo'lsa va bu albomga allaqachon javob berilgan bo'lsa
         if grouped_id is not None:
             if grouped_id in self._processed_albums:
                 return False, "Ushbu albom uchun avto-javob allaqachon ko'rib chiqilgan"
@@ -79,7 +56,7 @@ class RateLimiter:
             if len(self._processed_albums) > 1000:
                 self._processed_albums.clear()
 
-        # 4. Foydalanuvchi darajasidagi atomik qulflash (Atomic Lock)
+        # 3. Foydalanuvchi darajasidagi atomik qulflash (Atomic Lock)
         lock = self._get_user_lock(user_id)
         async with lock:
             today = self.get_today_date_str()

@@ -502,8 +502,7 @@ class TestDailyAnalyticsAndFeatures(unittest.IsolatedAsyncioTestCase):
 
     async def test_album_and_parallel_messages_rate_limiting(self):
         rate_limiter = RateLimiter(db=self.db)
-        with patch.object(rate_limiter, "is_workday", return_value=True), \
-             patch.object(rate_limiter, "is_work_hours", return_value=True):
+        with patch.object(rate_limiter, "is_workday", return_value=True):
             # 3 photos in the same album (same grouped_id)
             album_id = 987654321
             can_reply_1, _ = await rate_limiter.should_auto_reply(user_id=123, grouped_id=album_id)
@@ -513,29 +512,6 @@ class TestDailyAnalyticsAndFeatures(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(can_reply_1)
             self.assertFalse(can_reply_2)
             self.assertFalse(can_reply_3)
-
-    async def test_work_hours_rate_limiting(self):
-        rate_limiter = RateLimiter(db=self.db)
-        
-        # 1. Ish vaqtida (masalan 14:00)
-        with patch.object(rate_limiter, "is_workday", return_value=True), \
-             patch.object(rate_limiter, "is_work_hours", return_value=True):
-            can_reply, reason = await rate_limiter.should_auto_reply(user_id=999)
-            self.assertTrue(can_reply)
-
-        # 2. Ish vaqtidan tashqarida (masalan 20:00 yoki 07:00)
-        with patch.object(rate_limiter, "is_workday", return_value=True), \
-             patch.object(rate_limiter, "is_work_hours", return_value=False):
-            can_reply, reason = await rate_limiter.should_auto_reply(user_id=888)
-            self.assertFalse(can_reply)
-            self.assertIn("Ish vaqtidan tashqari", reason)
-
-        # 3. Dam olish kunida (Shanba/Yakshanba)
-        with patch.object(rate_limiter, "is_workday", return_value=False), \
-             patch.object(rate_limiter, "is_work_hours", return_value=True):
-            can_reply, reason = await rate_limiter.should_auto_reply(user_id=777)
-            self.assertFalse(can_reply)
-            self.assertIn("Dam olish kuni", reason)
 
 
 if __name__ == "__main__":
