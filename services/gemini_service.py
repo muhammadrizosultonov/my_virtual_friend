@@ -80,10 +80,10 @@ Javobingiz FAQAT quyidagi JSON formatida bo'lsin:
 """.strip()
 
 DEFAULT_FALLBACK_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-2.0-flash-lite"
+    "gemini-3.0-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.1-pro-preview"
 ]
 
 
@@ -103,9 +103,12 @@ class LeadAnalysisResult(BaseModel):
 
 
 class GeminiService:
-    def __init__(self, api_key: str, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str, model_name: str = "gemini-3.0-flash"):
         self.api_key = api_key
-        self.model_name = model_name
+        if not model_name or any(old in model_name for old in ["1.5", "2.0", "2.5"]):
+            self.model_name = "gemini-3.0-flash"
+        else:
+            self.model_name = model_name
         self.client = genai.Client(api_key=self.api_key)
 
     async def _generate_with_resilience(

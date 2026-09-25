@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
 from telethon import TelegramClient, events
 from telethon.tl.types import User
 from database.db import Database
@@ -75,7 +74,7 @@ def register_handlers(
     gemini_service: GeminiService,
     rate_limiter: RateLimiter,
     notifier: MonitoringNotifier,
-    sniper_service=None
+    sniper_service: Optional[any] = None
 ) -> None:
     """Xabarlarni yig'ish, media/TTL yuklash, avto-javob, /malumot, Lead Sniper va Saved Messages Downloader handleri."""
 
