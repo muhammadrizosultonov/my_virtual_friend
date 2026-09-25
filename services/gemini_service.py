@@ -80,9 +80,8 @@ Javobingiz FAQAT quyidagi JSON formatida bo'lsin:
 """.strip()
 
 DEFAULT_FALLBACK_MODELS = [
-    "gemini-3.0-flash",
-    "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-pro-preview"
 ]
 
@@ -95,18 +94,18 @@ class AiAnalysisResult(BaseModel):
 
 
 class LeadAnalysisResult(BaseModel):
-    is_lead: bool = Field(default=False, description="Haqiqiy buyurtmachimi?")
+    is_lead: bool = Field(description="Haqiqiy buyurtmachimi?")
     service_type: str = Field(default="Boshqa IT", description="Xizmat yo'nalishi")
     task_summary: str = Field(default="IT xizmat talabi", description="Buyurtma xulosasi")
     budget: Optional[str] = Field(default=None, description="Byudjet yoki narx")
-    urgency: str = Field(default="O'RTA", description="Shoshilinchlik darajasi")
+    urgency: Literal["YUQORI", "O'RTA", "ODDIY"] = Field(default="O'RTA", description="Shoshilinchlik darajasi")
 
 
 class GeminiService:
-    def __init__(self, api_key: str, model_name: str = "gemini-3.0-flash"):
+    def __init__(self, api_key: str, model_name: str = "gemini-3.6-flash"):
         self.api_key = api_key
-        if not model_name or any(old in model_name for old in ["1.5", "2.0", "2.5"]):
-            self.model_name = "gemini-3.0-flash"
+        if "2.5" in model_name or "1.5" in model_name or "2.0" in model_name:
+            self.model_name = "gemini-3.6-flash"
         else:
             self.model_name = model_name
         self.client = genai.Client(api_key=self.api_key)
@@ -275,20 +274,12 @@ class GeminiService:
                 raw_json = raw_json[:-3]
 
             parsed = json.loads(raw_json.strip())
-            raw_urg = str(parsed.get("urgency") or "O'RTA").upper()
-            if "YUQORI" in raw_urg or "HIGH" in raw_urg:
-                urgency = "YUQORI"
-            elif "PAST" in raw_urg or "LOW" in raw_urg or "ODDIY" in raw_urg:
-                urgency = "ODDIY"
-            else:
-                urgency = "O'RTA"
-
             return LeadAnalysisResult(
                 is_lead=bool(parsed.get("is_lead", False)),
-                service_type=str(parsed.get("service_type") or "Boshqa IT"),
-                task_summary=str(parsed.get("task_summary") or message_text[:100]),
+                service_type=str(parsed.get("service_type", "Boshqa IT")),
+                task_summary=str(parsed.get("task_summary", message_text[:100])),
                 budget=parsed.get("budget"),
-                urgency=urgency
+                urgency=parsed.get("urgency", "O'RTA")
             )
         except Exception as e:
             logger.error(f"❌ Gemini Lead tahlilida xatolik: {e}", exc_info=True)
