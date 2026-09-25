@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
 from telethon import TelegramClient, events
 from telethon.tl.types import User
 from database.db import Database
@@ -75,7 +74,7 @@ def register_handlers(
     gemini_service: GeminiService,
     rate_limiter: RateLimiter,
     notifier: MonitoringNotifier,
-    sniper_service=None
+    sniper_service: Optional[any] = None
 ) -> None:
     """Xabarlarni yig'ish, media/TTL yuklash, avto-javob, /malumot, Lead Sniper va Saved Messages Downloader handleri."""
 
@@ -184,17 +183,6 @@ def register_handlers(
                     await event.reply(analysis.auto_reply_text)
                     await rate_limiter.record_reply(sender.id)
                     logger.info(f"✨ Foydalanuvchiga avto-javob yuborildi ({sender.id})")
-
-                    # Monitoring botga real-time hisobot yuborish
-                    await notifier.send_instant_alert(
-                        sender_id=sender.id,
-                        sender_name=contact_name,
-                        sender_username=username,
-                        original_text=text,
-                        analysis=analysis,
-                        action_status="Avto-javob yuborildi ✅",
-                        reply_sent=True
-                    )
                 else:
                     logger.debug(f"Avto-javob yuborilmadi: {action_reason}")
 
